@@ -1,0 +1,24 @@
+Metadata-Version: 2.4
+Name: irec
+Version: 1.0
+Summary: Graph Sequentional recomendation system framework
+Requires-Python: >=3.12
+License-File: LICENSE
+Requires-Dist: numpy==1.26.*
+Requires-Dist: torch==2.4.*
+Requires-Dist: tqdm==4.66.*
+Requires-Dist: scipy==1.14.*
+Requires-Dist: pandas==2.2.*
+Requires-Dist: polars==1.27.*
+Requires-Dist: matplotlib==3.9.*
+Requires-Dist: tensorboard==2.19.*
+Requires-Dist: wandb==0.19.*
+Requires-Dist: jupyterlab==4.4.*
+Requires-Dist: ipykernel==6.29.*
+Requires-Dist: notebook==7.4.*
+Provides-Extra: dev
+Requires-Dist: mypy==1.11.*; extra == "dev"
+Requires-Dist: ruff==0.11.*; extra == "dev"
+Requires-Dist: types-tqdm==4.67.*; extra == "dev"
+Requires-Dist: scipy-stubs==1.15.*; extra == "dev"
+Dynamic: license-file
