@@ -1,0 +1,2 @@
+[console_scripts]
+train = irec.train:main
