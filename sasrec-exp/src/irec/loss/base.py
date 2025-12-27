@@ -8,6 +8,7 @@ from irec.utils import (
 import torch
 import torch.nn as nn
 
+
 import pickle
 import os
 import logging
@@ -553,6 +554,89 @@ class LogqSamplesSoftmaxLoss(TorchLoss, config_name='logq_sampled_softmax'):
 
         return loss
 
+class MCLSRLogqLoss(TorchLoss, config_name='mclsr_logq_special'):
+    def __init__(
+        self,
+        queries_prefix,
+        positive_prefix,
+        negative_prefix,
+        positive_ids_prefix,
+        negative_ids_prefix,
+        path_to_item_counts,
+        output_prefix=None,
+    ):
+        super().__init__()
+        self._queries_prefix = queries_prefix
+        self._positive_prefix = positive_prefix
+        self._negative_prefix = negative_prefix
+        self._positive_ids_prefix = positive_ids_prefix
+        self._negative_ids_prefix = negative_ids_prefix
+        self._output_prefix = output_prefix
+
+        # Load item interaction counts
+        if not os.path.exists(path_to_item_counts):
+            raise FileNotFoundError(f"Item counts file not found at {path_to_item_counts}")
+
+        with open(path_to_item_counts, 'rb') as f:
+            counts = pickle.load(f)
+        
+        counts_tensor = torch.tensor(counts, dtype=torch.float32)
+        
+        # Google Paper Proof (Section 3, Eq. 3): 
+        # "s_c(x, y) = s(x, y) - log(p_j)"
+        # We pre-calculate log(p_j) where p_j is item popularity probability.
+        probs = torch.clamp(counts_tensor / counts_tensor.sum(), min=1e-10)
+        log_q = torch.log(probs)
+        
+        # register_buffer ensures log_q moves to GPU with the model automatically
+        self.register_buffer('_log_q_table', log_q)
+
+    @classmethod
+    def create_from_config(cls, config, **kwargs):
+        return cls(
+            queries_prefix=config['queries_prefix'],
+            positive_prefix=config['positive_prefix'],
+            negative_prefix=config['negative_prefix'],
+            positive_ids_prefix=config['positive_ids_prefix'],
+            negative_ids_prefix=config['negative_ids_prefix'],
+            path_to_item_counts=config['path_to_item_counts'],
+            output_prefix=config.get('output_prefix')
+        )
+
+    def forward(self, inputs):
+        queries = inputs[self._queries_prefix]           # (Batch, Dim)
+        pos_embs = inputs[self._positive_prefix]         # (Batch, Dim)
+        neg_embs = inputs[self._negative_prefix]         # (Batch, NumNegs, Dim)
+        
+        pos_ids = inputs[self._positive_ids_prefix]      # (Batch)
+        neg_ids = inputs[self._negative_ids_prefix]      # (Batch, NumNegs)
+
+        # 1. Scoring (Inner Product)
+        pos_scores = torch.einsum('bd,bd->b', queries, pos_embs).unsqueeze(-1)
+        neg_scores = torch.einsum('bd,bnd->bn', queries, neg_embs)
+
+        # 2. False Negative Masking (Special for MCLSR 3D-tensors)
+        # Proof: We must mask items where pos_id == neg_id to remain unbiased.
+        # Shape: (Batch, 1) == (Batch, NumNegs) -> (Batch, NumNegs)
+        false_negative_mask = (pos_ids.unsqueeze(1) == neg_ids)
+        neg_scores = neg_scores.masked_fill(false_negative_mask, -1e12)
+
+        # 3. LogQ Correction (The "Antidote")
+        # Subtracting the bias introduced by non-uniform sampling
+        log_q_pos = self._log_q_table[pos_ids].unsqueeze(-1)   # (B, 1)
+        log_q_neg = self._log_q_table[neg_ids]                 # (B, N)
+        
+        pos_scores = pos_scores - log_q_pos
+        neg_scores = neg_scores - log_q_neg
+
+        # 4. Final Sampled Softmax
+        all_scores = torch.cat([pos_scores, neg_scores], dim=1) # (B, 1+N)
+        loss = -torch.log_softmax(all_scores, dim=1)[:, 0]
+        
+        final_loss = loss.mean()
+        if self._output_prefix:
+            inputs[self._output_prefix] = final_loss.cpu().item()
+        return final_loss
 
 class S3RecPretrainLoss(TorchLoss, config_name='s3rec_pretrain'):
     def __init__(
