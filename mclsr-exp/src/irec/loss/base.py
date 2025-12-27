@@ -607,6 +607,13 @@ class MCLSRLogqLoss(TorchLoss, config_name='mclsr_logq_special'):
         pos_ids = inputs[self._positive_ids_prefix]      # (Batch)
         neg_ids = inputs[self._negative_ids_prefix]      # Could be (Batch, N) or (N)
 
+
+        # --- FIX: Ensure the LogQ table is on the same device as inputs ---
+        # This prevents the "indices should be on the same device" error
+        device = queries.device
+        if self._log_q_table.device != device:
+            self._log_q_table = self._log_q_table.to(device)
+
         # --- STEP 1: Scoring with Dimension Check ---
         pos_scores = torch.einsum('bd,bd->b', queries, pos_embs).unsqueeze(-1) # (B, 1)
 
