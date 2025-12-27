@@ -573,7 +573,7 @@ class MCLSRLogqLoss(TorchLoss, config_name='mclsr_logq_special'):
         self._negative_ids_prefix = negative_ids_prefix
         self._output_prefix = output_prefix
 
-        # Load item interaction counts
+        # Load item interaction counts for LogQ correction
         if not os.path.exists(path_to_item_counts):
             raise FileNotFoundError(f"Item counts file not found at {path_to_item_counts}")
 
@@ -582,13 +582,9 @@ class MCLSRLogqLoss(TorchLoss, config_name='mclsr_logq_special'):
         
         counts_tensor = torch.tensor(counts, dtype=torch.float32)
         
-        # Google Paper Proof (Section 3, Eq. 3): 
-        # "s_c(x, y) = s(x, y) - log(p_j)"
-        # We pre-calculate log(p_j) where p_j is item popularity probability.
+        # Google Paper: s_c(x, y) = s(x, y) - log(p_j)
         probs = torch.clamp(counts_tensor / counts_tensor.sum(), min=1e-10)
         log_q = torch.log(probs)
-        
-        # register_buffer ensures log_q moves to GPU with the model automatically
         self.register_buffer('_log_q_table', log_q)
 
     @classmethod
@@ -606,30 +602,44 @@ class MCLSRLogqLoss(TorchLoss, config_name='mclsr_logq_special'):
     def forward(self, inputs):
         queries = inputs[self._queries_prefix]           # (Batch, Dim)
         pos_embs = inputs[self._positive_prefix]         # (Batch, Dim)
-        neg_embs = inputs[self._negative_prefix]         # (Batch, NumNegs, Dim)
+        neg_embs = inputs[self._negative_prefix]         # Could be (Batch, N, Dim) or (N, Dim)
         
         pos_ids = inputs[self._positive_ids_prefix]      # (Batch)
-        neg_ids = inputs[self._negative_ids_prefix]      # (Batch, NumNegs)
+        neg_ids = inputs[self._negative_ids_prefix]      # Could be (Batch, N) or (N)
 
-        # 1. Scoring (Inner Product)
-        pos_scores = torch.einsum('bd,bd->b', queries, pos_embs).unsqueeze(-1)
-        neg_scores = torch.einsum('bd,bnd->bn', queries, neg_embs)
+        # --- STEP 1: Scoring with Dimension Check ---
+        pos_scores = torch.einsum('bd,bd->b', queries, pos_embs).unsqueeze(-1) # (B, 1)
 
-        # 2. False Negative Masking (Special for MCLSR 3D-tensors)
-        # Proof: We must mask items where pos_id == neg_id to remain unbiased.
-        # Shape: (Batch, 1) == (Batch, NumNegs) -> (Batch, NumNegs)
-        false_negative_mask = (pos_ids.unsqueeze(1) == neg_ids)
+        if neg_embs.dim() == 2:
+            # Shared negatives across batch (N, Dim)
+            # Equation: s(b, n) = sum_d (query[b, d] * neg[n, d])
+            neg_scores = torch.einsum('bd,nd->bn', queries, neg_embs)
+        else:
+            # Per-user negatives (Batch, N, Dim)
+            neg_scores = torch.einsum('bd,bnd->bn', queries, neg_embs)
+
+        # --- STEP 2: Masking & LogQ with Dimension Check ---
+        log_q_pos = self._log_q_table[pos_ids].unsqueeze(-1) # (B, 1)
+        
+        if neg_ids.dim() == 1:
+            # Global pool of negatives for all users in batch
+            # Mask shape: (Batch, 1) == (1, N) -> (Batch, N)
+            false_negative_mask = (pos_ids.unsqueeze(1) == neg_ids.unsqueeze(0))
+            log_q_neg = self._log_q_table[neg_ids].unsqueeze(0) # (1, N)
+        else:
+            # Individual negatives per user
+            # Mask shape: (Batch, 1) == (Batch, N) -> (Batch, N)
+            false_negative_mask = (pos_ids.unsqueeze(1) == neg_ids)
+            log_q_neg = self._log_q_table[neg_ids] # (Batch, N)
+
+        # Apply Masking (False Negative Removal)
         neg_scores = neg_scores.masked_fill(false_negative_mask, -1e12)
 
-        # 3. LogQ Correction (The "Antidote")
-        # Subtracting the bias introduced by non-uniform sampling
-        log_q_pos = self._log_q_table[pos_ids].unsqueeze(-1)   # (B, 1)
-        log_q_neg = self._log_q_table[neg_ids]                 # (B, N)
-        
+        # Apply LogQ Correction
         pos_scores = pos_scores - log_q_pos
         neg_scores = neg_scores - log_q_neg
 
-        # 4. Final Sampled Softmax
+        # --- STEP 3: Softmax ---
         all_scores = torch.cat([pos_scores, neg_scores], dim=1) # (B, 1+N)
         loss = -torch.log_softmax(all_scores, dim=1)[:, 0]
         
