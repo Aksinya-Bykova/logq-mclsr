@@ -298,6 +298,120 @@ class FpsLoss(TorchLoss, config_name='fps'):
             inputs[self._output_prefix] = loss.cpu().item()
 
         return loss
+    
+class MCLSRFpsLogqLoss(TorchLoss, config_name='fps_logq'):
+    """
+    Experimental Item-level Contrastive Loss (i2i) with LogQ correction.
+    Config name: 'fps_logq'
+    
+    This loss performs alignment between two feature views of the same items.
+    Correction is applied to the similarity matrix to mitigate popularity bias 
+    in the contrastive space.
+    """
+    def __init__(
+        self,
+        fst_embeddings_prefix,
+        snd_embeddings_prefix,
+        tau,
+        logq_prefix=None,           # Key for unique_item_ids from the model
+        log_counts=None,            # Pre-loaded log frequencies
+        logq_lambda=1.0,            # Tunable correction strength (lambda)
+        normalize_embeddings=False,
+        output_prefix=None,
+    ):
+        super().__init__()
+        self._fst_embeddings_prefix = fst_embeddings_prefix
+        self._snd_embeddings_prefix = snd_embeddings_prefix
+        self._tau = tau
+        self._logq_prefix = logq_prefix
+        self._log_counts = log_counts
+        self._logq_lambda = logq_lambda
+        self._normalize_embeddings = normalize_embeddings
+        self._output_prefix = output_prefix
+        self._loss_function = nn.CrossEntropyLoss()
+
+    @classmethod
+    def create_from_config(cls, config, **kwargs):
+        log_counts = None
+        path_to_counts = config.get('path_to_item_counts')
+        
+        # Load popularity stats only if correction is requested
+        if path_to_counts and config.get('use_logq_correction', False):
+            import pickle
+            with open(path_to_counts, 'rb') as f:
+                counts = pickle.load(f)
+            counts_tensor = torch.tensor(counts, dtype=torch.float32)
+            # Probability-based log-frequencies (Google Eq. 3)
+            probs = torch.clamp(counts_tensor / counts_tensor.sum(), min=1e-10)
+            log_counts = torch.log(probs)
+            logger.info(f"Loaded item counts for i2i LogQ from {path_to_counts}")
+
+        return cls(
+            fst_embeddings_prefix=config['fst_embeddings_prefix'],
+            snd_embeddings_prefix=config['snd_embeddings_prefix'],
+            tau=config.get('temperature', 1.0),
+            logq_prefix=config.get('logq_prefix'),
+            log_counts=log_counts,
+            logq_lambda=config.get('logq_lambda', 1.0),
+            normalize_embeddings=config.get('normalize_embeddings', False),
+            output_prefix=config.get('output_prefix')
+        )
+
+    def forward(self, inputs):
+        # U = number of unique items in the current batch
+        fst_emb = inputs[self._fst_embeddings_prefix] # (U, D)
+        snd_emb = inputs[self._snd_embeddings_prefix] # (U, D)
+        U = fst_emb.shape[0]
+
+        # 1. Prepare combined embeddings for contrastive matrix
+        combined = torch.cat((fst_emb, snd_emb), dim=0) # (2U, D)
+        if self._normalize_embeddings:
+            combined = torch.nn.functional.normalize(combined, p=2, dim=-1)
+
+        # 2. Calculate similarity matrix and scale by temperature (tau)
+        logits = torch.mm(combined, combined.T) / self._tau # (2U, 2U)
+
+        # 3. APPLY LOGQ CORRECTION (The "Google recipe" for i2i)
+        if self._log_counts is not None and self._logq_prefix in inputs:
+            if self._log_counts.device != logits.device:
+                self._log_counts = self._log_counts.to(logits.device)
+            
+            # IDs of unique items that formed the scatter_mean representations
+            item_ids = inputs[self._logq_prefix] # (U,)
+            log_q = self._log_counts[item_ids]   # (U,)
+            
+            # Since the matrix is (2U x 2U), we duplicate log_q
+            log_q_2U = torch.cat((log_q, log_q), dim=0) # (2U,)
+            
+            # Correct each column: s_ij = s_ij - lambda * log(Q_j)
+            # This penalizes popular items when they act as negatives for others.
+            logits = logits - (self._logq_lambda * log_q_2U.unsqueeze(0))
+
+        # 4. Final InfoNCE steps: Extract positives and mask negatives
+        # Positive pairs are the same items from different views (shifted by U)
+        positives = torch.cat([
+            torch.diag(logits, U),  # upper diagonal
+            torch.diag(logits, -U)  # lower diagonal
+        ], dim=0).unsqueeze(1)      # (2U, 1)
+
+        # Mask to remove self-similarities and positive pairs from negative pool
+        mask = torch.ones(2*U, 2*U, dtype=torch.bool, device=logits.device)
+        mask.fill_diagonal_(0)
+        for i in range(U):
+            mask[i, U + i] = 0
+            mask[U + i, i] = 0
+
+        negatives = logits[mask].reshape(2*U, -1) # (2U, 2U - 2)
+
+        # Combine: positives at index 0
+        all_logits = torch.cat([positives, negatives], dim=1) # (2U, 2U - 1)
+        labels = torch.zeros(2*U, dtype=torch.long, device=logits.device)
+        
+        loss = self._loss_function(all_logits, labels) / 2
+
+        if self._output_prefix:
+            inputs[self._output_prefix] = loss.cpu().item()
+        return loss
 
 
 class SASRecLoss(TorchLoss, config_name='sasrec'):

@@ -402,6 +402,14 @@ class MCLSRModel(TorchModel, config_name='mclsr'):
                 # for L_IC
                 'item_graph_item_embeddings': unique_item_graph_items_proj,
                 'common_graph_item_embeddings': unique_common_graph_items_proj,
+
+                'positive_ids': labels,       # For downstream L_P
+                'negative_ids': negative_ids, # For downstream L_P
+                'user_ids': user_ids,         # For user-level L_UC
+                
+                # for i2i (L_IC) !!!
+                # see loss fps_logq
+                'unique_item_ids': unique_item_ids 
             }
         else:  # eval mode
             # formula 16: R(u,N) = Top-N((I_s)^T * h_o)
