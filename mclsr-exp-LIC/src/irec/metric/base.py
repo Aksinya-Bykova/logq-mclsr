@@ -149,7 +149,7 @@ class MCLSRNDCGMetric(BaseMetric, config_name="mclsr-ndcg"):
         dcg = (is_hit.float() * weights).sum(dim=-1)  # (batch_size)
         idcg = (ideal_mask.float() * weights).sum(dim=-1)  # (batch_size)
 
-        ndcg = dcg / idcg
+        ndcg = dcg / idcg.clamp(min=1e-9)
 
         return ndcg.tolist()
 
