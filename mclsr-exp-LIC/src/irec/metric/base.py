@@ -173,12 +173,8 @@ class MCLSRRecallMetric(BaseMetric, config_name="mclsr-recall"):
         is_hit = (
             (predictions[:, :, None] == padded_labels[:, None, :]).sum(dim=-1).float()
         )  # (batch_size, k)
-        recall = is_hit.sum(dim=-1) / torch.minimum(
-            labels_lengths,
-            torch.as_tensor(
-                self._k, device=labels_lengths.device, dtype=labels_lengths.dtype
-            ),
-        )  # (batch_size)
+
+        recall = is_hit.sum(dim=-1) / labels_lengths.float().clamp(min=1e-9)  # (batch_size)
 
         return recall.tolist()
 
