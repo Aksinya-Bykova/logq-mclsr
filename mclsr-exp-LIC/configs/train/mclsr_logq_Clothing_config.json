@@ -1,5 +1,5 @@
 {
-  "experiment_name": "mclsr_logq_Clothing_special_fixed",
+  "experiment_name": "mclsr_logq_lambda0.2_Clothing",
   "use_wandb": false,
   "best_metric": "validation/ndcg@20",
   "dataset": {
@@ -74,6 +74,8 @@
         "path_to_item_counts": "./data/Clothing/item_counts.pkl",
         "positive_ids_prefix": "positive_ids",
         "negative_ids_prefix": "negative_ids",
+        
+        "logq_lambda": 0.2,
         
         "output_prefix": "downstream_loss",
         "weight": 1.0
