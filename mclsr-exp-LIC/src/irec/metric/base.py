@@ -195,11 +195,6 @@ class MCLSRHitRateMetric(BaseMetric, config_name="mclsr-hit"):
         )
         padded_labels[~labels_mask] = -1
 
-        hit_rate = (
-            (predictions[:, :, None] == padded_labels[:, None, :])
-            .sum(dim=-1)
-            .max(dim=-1)
-            .values.float()
-        )  # (batch_size)
+        hit_rate = (predictions[:, :, None] == padded_labels[:, None, :]).sum(dim=-1).any(dim=-1).float()  # (batch_size)
 
         return hit_rate.tolist()
