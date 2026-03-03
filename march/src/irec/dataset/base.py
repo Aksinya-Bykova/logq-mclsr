@@ -383,8 +383,21 @@ class GraphDataset(BaseDataset, config_name='graph'):
     ):
         if entity_type not in ['user', 'item']:
             raise ValueError("entity_type must be either 'user' or 'item'")
+        # have to delete and replace to not delete npz each time manually
+        # path_to_graph = os.path.join(self._graph_dir_path, '{}_graph.npz'.format(entity_type))
 
-        path_to_graph = os.path.join(self._graph_dir_path, '{}_graph.npz'.format(entity_type))
+        # instead better use such construction
+
+        # neighborhood_size
+        # The neighborhood_size is a filter that constrains the number of edges for each user or 
+        # item node in the graph.
+        # k=50 implies that for each user, we find all possible neighbors, sort them based on 
+        # co-occurrence counts, and keep only the top 50. All other connections are removed from the graph.
+        k_suffix = f"k{self._neighborhood_size}" if self._neighborhood_size is not None else "full"
+        train_suffix = "trainOnly" if self._use_train_data_only else "withValTest"
+        filename = f"{entity_type}_graph_{k_suffix}_{train_suffix}.npz"
+        path_to_graph = os.path.join(self._graph_dir_path, filename)
+
         is_user_graph = (entity_type == 'user')
         num_entities = self._num_users if is_user_graph else self._num_items
 
@@ -450,7 +463,11 @@ class GraphDataset(BaseDataset, config_name='graph'):
         return self._convert_sp_mat_to_sp_tensor(graph_matrix).coalesce().to(DEVICE)
 
     def _build_or_load_bipartite_graph(self, graph_dir_path, train_user_interactions, train_item_interactions):
-        path_to_graph = os.path.join(graph_dir_path, 'general_graph.npz')
+        # path_to_graph = os.path.join(graph_dir_path, 'general_graph.npz')
+        train_suffix = "trainOnly" if self._use_train_data_only else "withValTest"
+        filename = f"general_graph_{train_suffix}.npz"
+        path_to_graph = os.path.join(graph_dir_path, filename)
+
         if os.path.exists(path_to_graph):
             graph_matrix = sp.load_npz(path_to_graph)
         else:
