@@ -394,7 +394,12 @@ class GraphDataset(BaseDataset, config_name='graph'):
             interactions_fst = []
             interactions_snd = []
             visited_user_item_pairs = set()
-            visited_entity_pairs = set()
+            # have to delete cause
+            # 3.2 Graph Construction
+            # User-user/item-item graph 
+            # ..the weight of each edge denotes the number of co-action behaviors between user i and user j
+
+            # visited_entity_pairs = set()
 
             for user_id, item_id in tqdm(
                 zip(train_user_interactions, train_item_interactions),
@@ -414,10 +419,10 @@ class GraphDataset(BaseDataset, config_name='graph'):
                         continue
 
                     pair_key = (source_entity, connected_entity)
-                    if pair_key in visited_entity_pairs:
-                        continue
+                    # if pair_key in visited_entity_pairs:
+                        # continue
                     
-                    visited_entity_pairs.add(pair_key)
+                    # visited_entity_pairs.add(pair_key)
                     interactions_fst.append(source_entity)
                     interactions_snd.append(connected_entity)
 
