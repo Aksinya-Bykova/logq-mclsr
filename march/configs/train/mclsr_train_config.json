@@ -7,10 +7,10 @@
     "use_user_graph": true,
     "use_item_graph": true,
     "neighborhood_size": 50,
-    "graph_dir_path": "../data/Clothing",
+    "graph_dir_path": "./data/Clothing",
     "dataset": {
       "type": "mclsr",
-      "path_to_data_dir": "../data",
+      "path_to_data_dir": "./data",
       "name": "Clothing",
       "max_sequence_length": 20,
       "samplers": {
