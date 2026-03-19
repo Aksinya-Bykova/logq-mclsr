@@ -17,7 +17,7 @@
         "num_negatives_val": 1280,
         "num_negatives_train": 1280,
         "type": "mclsr",
-        "negative_sampler_type": "popularity" 
+        "negative_sampler_type": "random" 
       }
     }
   },
