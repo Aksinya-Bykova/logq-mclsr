@@ -5,6 +5,8 @@ import torch.nn as nn
 
 from irec.utils import create_masked_tensor
 
+torch.backends.cudnn.benchmark = True
+
 
 class MCLSRModel(TorchModel, config_name='mclsr'):
     def __init__(
