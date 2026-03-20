@@ -534,6 +534,40 @@ class GraphDataset(BaseDataset, config_name='graph'):
             neighborhood_size=config.get('neighborhood_size', None),
         )
 
+    # @staticmethod
+    # def get_sparse_graph_layer(
+    #     sparse_matrix,
+    #     fst_dim,
+    #     snd_dim,
+    #     biparite=False,
+    # ):
+    #     if not biparite:
+    #         adj_mat = sparse_matrix.tocsr()
+    #     else:
+    #         R = sparse_matrix.tocsr()
+            
+    #         upper_right = R
+    #         lower_left = R.T
+            
+    #         upper_left = sp.csr_matrix((fst_dim, fst_dim))
+    #         lower_right = sp.csr_matrix((snd_dim, snd_dim))
+            
+    #         adj_mat = sp.bmat([
+    #             [upper_left, upper_right],
+    #             [lower_left, lower_right]
+    #         ])
+    #         assert adj_mat.shape == (fst_dim + snd_dim, fst_dim + snd_dim), (
+    #         f"Got shape {adj_mat.shape}, expected {(fst_dim+snd_dim, fst_dim+snd_dim)}"
+    #         )
+        
+    #     rowsum = np.array(adj_mat.sum(1))
+    #     d_inv = np.power(rowsum, -0.5).flatten()
+    #     d_inv[np.isinf(d_inv)] = 0.
+    #     d_mat_inv = sp.diags(d_inv)
+        
+    #     norm_adj = d_mat_inv.dot(adj_mat).dot(d_mat_inv)
+    #     return norm_adj.tocsr()
+
     @staticmethod
     def get_sparse_graph_layer(
         sparse_matrix,
@@ -560,12 +594,39 @@ class GraphDataset(BaseDataset, config_name='graph'):
             f"Got shape {adj_mat.shape}, expected {(fst_dim+snd_dim, fst_dim+snd_dim)}"
             )
         
-        rowsum = np.array(adj_mat.sum(1))
-        d_inv = np.power(rowsum, -0.5).flatten()
-        d_inv[np.isinf(d_inv)] = 0.
-        d_mat_inv = sp.diags(d_inv)
+        # --- OLD IMPLEMENTATION (Slow & Memory Intensive for Large Corpus) ---
+        # rowsum = np.array(adj_mat.sum(1))
+        # d_inv = np.power(rowsum, -0.5).flatten()
+        # d_inv[np.isinf(d_inv)] = 0.
+        # d_mat_inv = sp.diags(d_inv)
+        # norm_adj = d_mat_inv.dot(adj_mat).dot(d_mat_inv)
+        # return norm_adj.tocsr()
+
+        # --- NEW OPTIMIZED IMPLEMENTATION ---
+        """
+        Optimization Strategy: Vectorized Symmetric Normalization (D^-0.5 * A * D^-0.5).
         
-        norm_adj = d_mat_inv.dot(adj_mat).dot(d_mat_inv)
+        Justification for Amazon Books Scale:
+        1. Memory Efficiency: Creating an explicit diagonal matrix 'd_mat_inv' 
+           (size N x N) via sp.diags is redundant. For 800k+ nodes, this consumes 
+           significant RAM and creates heavy intermediate objects.
+        2. Computational Speed: Traditional matrix-matrix multiplication (.dot) 
+           in Scipy sparse has higher overhead compared to row/column-wise scaling.
+        3. Implementation: We perform element-wise multiplication of the sparse 
+           matrix by 1D degree vectors. Multiplying a sparse matrix by a column 
+           vector scales rows, and by a row vector scales columns.
+        
+        This results in an identical Laplacian matrix but is calculated in O(E) 
+        time with minimal memory footprint, where E is the number of edges.
+        """
+        rowsum = np.array(adj_mat.sum(1)).flatten()
+        d_inv = np.power(rowsum, -0.5)
+        d_inv[np.isinf(d_inv)] = 0.
+        
+        # Scaling rows: multiply by column vector [N, 1]
+        # Scaling columns: multiply by row vector [1, N]
+        norm_adj = adj_mat.multiply(d_inv[:, np.newaxis]).multiply(d_inv)
+        
         return norm_adj.tocsr()
 
     @staticmethod
