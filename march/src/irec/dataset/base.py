@@ -640,18 +640,52 @@ class GraphDataset(BaseDataset, config_name='graph'):
 
     @staticmethod
     def _filter_matrix_by_top_k(matrix, k):
-        mat = matrix.tolil()
+        # --- OLD IMPLEMENTATION (Extremely slow conversion to LIL for large datasets) ---
+        # mat = matrix.tolil()
+        # for i in range(mat.shape[0]):
+        #     if len(mat.rows[i]) <= k:
+        #         continue
+        #     data = np.array(mat.data[i])
+        #     top_k_indices = np.argpartition(data, -k)[-k:]
+        #     mat.data[i] = [mat.data[i][j] for j in top_k_indices]
+        #     mat.rows[i] = [mat.rows[i][j] for j in top_k_indices]
+        # return mat.tocsr()
 
+        # --- NEW OPTIMIZED IMPLEMENTATION ---
+        """
+        Optimization Strategy: Direct CSR Array Manipulation with NumPy Partitioning.
+        
+        Justification for Amazon Books Scale:
+        1. Avoids LIL conversion: Converting a 450k x 300k matrix to LIL format 
+           (List of Lists) is extremely memory-intensive and slow.
+        2. In-place filtering: By accessing the CSR 'data' and 'indptr' arrays directly, 
+           we perform the Top-K filtering with zero additional memory allocation 
+           for the matrix structure itself.
+        3. Algorithmic Speed: np.partition finds the threshold value in O(n) average 
+           time. Slicing the underlying NumPy arrays is performed at near-C speed, 
+           making this orders of magnitude faster than Python-level list operations.
+        """
+        mat = matrix.tocsr()
+        
         for i in range(mat.shape[0]):
-            if len(mat.rows[i]) <= k:
-                continue
-            data = np.array(mat.data[i])
+            start = mat.indptr[i]
+            end = mat.indptr[i+1]
             
-            top_k_indices = np.argpartition(data, -k)[-k:]
-            mat.data[i] = [mat.data[i][j] for j in top_k_indices]
-            mat.rows[i] = [mat.rows[i][j] for j in top_k_indices]
-
-        return mat.tocsr()
+            # Only process rows that actually exceed the neighborhood size
+            if end - start > k:
+                row_slice = mat.data[start:end]
+                
+                # Find the threshold value (the k-th largest element)
+                # np.partition is faster than a full sort: it puts the top-k values at the end
+                threshold = np.partition(row_slice, -k)[-k]
+                
+                # Effectively prune edges by zeroing out everything below the threshold
+                # This keeps exactly k (or slightly more if there are ties) elements
+                row_slice[row_slice < threshold] = 0
+        
+        # Post-processing: remove the explicitly zeroed elements from the sparse structure
+        mat.eliminate_zeros()
+        return mat
 
     def get_samplers(self):
         return self._dataset.get_samplers()
