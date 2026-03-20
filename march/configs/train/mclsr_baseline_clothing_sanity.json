@@ -29,7 +29,8 @@
         "type": "basic" 
       },
       "drop_last": true,
-      "shuffle": true
+      "shuffle": true,
+      "num_workers": 4
     },
     "validation": {
       "type": "torch",
@@ -38,7 +39,8 @@
         "type": "basic"
       },
       "drop_last": false,
-      "shuffle": false
+      "shuffle": false,
+      "num_workers": 4
     }
   },
   "model": {
