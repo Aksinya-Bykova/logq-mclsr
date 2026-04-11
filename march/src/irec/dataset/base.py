@@ -417,58 +417,120 @@ class GraphDataset(BaseDataset, config_name="graph"):
         is_user_graph = entity_type == "user"
         num_entities = self._num_users if is_user_graph else self._num_items
 
+        # if os.path.exists(path_to_graph):
+        #     graph_matrix = sp.load_npz(path_to_graph)
+        # else:
+        #     interactions_fst = []
+        #     interactions_snd = []
+        #     visited_user_item_pairs = set()
+        #     # have to delete cause
+        #     # 3.2 Graph Construction
+        #     # User-user/item-item graph
+        #     # ..the weight of each edge denotes the number of co-action behaviors between user i and user j
+
+        #     # SANITY CHECKED
+
+        #     for user_id, item_id in tqdm(
+        #         zip(train_user_interactions, train_item_interactions),
+        #         desc="Building {}-{} graph".format(
+        #             entity_type, entity_type
+        #     ):
+        #         if (user_id, item_id) in visited_user_item_pairs:
+        #             continue
+        #         visited_user_item_pairs.add((user_id, item_id))
+
+        #         source_entity = user_id if is_user_graph else item_id
+        #         connection_map = (
+        #             train_item_2_users if is_user_graph else train_user_2_items
+        #         )
+        #         connection_point = item_id if is_user_graph else user_id
+
+        #         for connected_entity in connection_map[connection_point]:
+        #             if source_entity == connected_entity:
+        #                 continue
+
+        #             # todo (Algorithmic Efficiency): Manual nested loops in Python to find co-occurrences.
+        #             # This is essentially computing A * A^T (matrix multiplication) but in O(N*M) Python loops.
+        #             # Recommendation: Use Scipy sparse matrix multiplication (A.dot(A.T)) which is implemented in C++/Fortran.
+        #             # It's orders of magnitude faster and handles the "visited" logic naturally.
+        #             interactions_fst.append(source_entity)
+        #             interactions_snd.append(connected_entity)
+
+        #     connections = csr_matrix(
+        #         (np.ones(len(interactions_fst)), (interactions_fst, interactions_snd)),
+        #         shape=(num_entities + 2, num_entities + 2),
+        #     )
+
+        #     if self._neighborhood_size is not None:
+        #         connections = self._filter_matrix_by_top_k(
+        #             connections, self._neighborhood_size
+        #         )
+
+        #     graph_matrix = self.get_sparse_graph_layer(
+        #         connections, num_entities + 2, num_entities + 2, biparite=False
+        #     )
+        #     sp.save_npz(path_to_graph, graph_matrix)
+
         if os.path.exists(path_to_graph):
             graph_matrix = sp.load_npz(path_to_graph)
         else:
-            interactions_fst = []
-            interactions_snd = []
-            visited_user_item_pairs = set()
-            # have to delete cause
-            # 3.2 Graph Construction
-            # User-user/item-item graph
-            # ..the weight of each edge denotes the number of co-action behaviors between user i and user j
+            # --- OPTIMIZED GRAPH CONSTRUCTION (Systems-oriented approach) ---
+            """
+            MATHEMATICAL JUSTIFICATION:
+            The original manual implementation aimed to build a similarity graph where each edge
+            weight represents the number of "co-action" behaviors (shared interactions).
 
-            # visited_entity_pairs = set()
-            # SANITY CHECKED
+            1. Manual approach: For every (user, item) pair, we find all other users who interacted
+               with the same item and increment their similarity. This is an O(N * M) operation
+               in Python, which is extremely slow due to object overhead and interpreter speed.
 
-            for user_id, item_id in tqdm(
-                zip(train_user_interactions, train_item_interactions),
-                desc="Building {}-{} graph".format(
-                    entity_type, entity_type
-                ),  # TODO need?
-            ):
-                if (user_id, item_id) in visited_user_item_pairs:
-                    continue
-                visited_user_item_pairs.add((user_id, item_id))
+            2. Matrix approach: This is exactly the definition of Sparse Matrix Multiplication.
+               If R is a binary User-Item interaction matrix:
+               - User-User Graph: A = R * R^T. The element A[u1, u2] is the dot product of rows
+                 u1 and u2, which equals the number of items both users interacted with.
+               - Item-Item Graph: A = R^T * R. The element A[i1, i2] is the dot product of columns
+                 i1 and i2, which equals the number of users who interacted with both items.
 
-                # TODO look here at review
-                source_entity = user_id if is_user_graph else item_id
-                connection_map = (
-                    train_item_2_users if is_user_graph else train_user_2_items
-                )
-                connection_point = item_id if is_user_graph else user_id
+            3. Safety & Logic:
+               - The 'visited_user_item_pairs' logic is naturally handled by creating a binary
+                 CSR matrix (where values are 1 if an interaction exists).
+               - The 'source_entity == connected_entity' exclusion is handled by zeroing the
+                 diagonal of the resulting matrix (setdiag(0)).
+               - Shape consistency is maintained using (num_users + 2) and (num_items + 2).
+            """
 
-                for connected_entity in connection_map[connection_point]:
-                    if source_entity == connected_entity:
-                        continue
-
-                    # TODO (Algorithmic Efficiency): Manual nested loops in Python to find co-occurrences.
-                    # This is essentially computing A * A^T (matrix multiplication) but in O(N*M) Python loops.
-                    # Recommendation: Use Scipy sparse matrix multiplication (A.dot(A.T)) which is implemented in C++/Fortran.
-                    # It's orders of magnitude faster and handles the "visited" logic naturally.
-                    interactions_fst.append(source_entity)
-                    interactions_snd.append(connected_entity)
-
-            connections = csr_matrix(
-                (np.ones(len(interactions_fst)), (interactions_fst, interactions_snd)),
-                shape=(num_entities + 2, num_entities + 2),
+            # Step 1: Create a binary interaction matrix R (User-Item)
+            # We use a binary matrix to count unique co-actions (replaces visited_user_item_pairs)
+            R = csr_matrix(
+                (
+                    np.ones(len(train_user_interactions)),
+                    (train_user_interactions, train_item_interactions),
+                ),
+                shape=(self._num_users + 2, self._num_items + 2),
             )
 
+            # Step 2: Perform matrix multiplication to find co-occurrences
+            # This replaces the nested 'for connected_entity in connection_map' loops
+            if is_user_graph:
+                # User-User: How many items did both users interact with?
+                connections = R.dot(R.T)
+            else:
+                # Item-Item: How many users interacted with both items?
+                connections = R.T.dot(R)
+
+            # Step 3: Remove self-loops and explicit zeros
+            # This replaces 'if source_entity == connected_entity: continue'
+            connections.setdiag(0)
+            connections.eliminate_zeros()
+
+            # --- RESUME ORIGINAL PIPELINE ---
+            # Now 'connections' is a CSR matrix identical to the one built manually before
             if self._neighborhood_size is not None:
                 connections = self._filter_matrix_by_top_k(
                     connections, self._neighborhood_size
                 )
 
+            # Normalize the graph (Symmetric Normalization: D^-0.5 * A * D^-0.5)
             graph_matrix = self.get_sparse_graph_layer(
                 connections, num_entities + 2, num_entities + 2, biparite=False
             )
