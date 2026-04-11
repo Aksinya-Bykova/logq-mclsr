@@ -236,11 +236,18 @@ class SequenceDataset(BaseDataset, config_name="sequence"):
         logger.info("Creating a dataset from {}...".format(dataset_path))
 
         with open(dataset_path, "r") as f:
-            # TODO (Memory Management): f.readlines() loads the entire file into RAM as heavy Python strings.
+            # (Memory Management): f.readlines() loads the entire file into RAM as heavy Python strings.
             # Recommendation: Use a generator 'for line in f:' to process line-by-line or read as a binary buffer.
-            data = f.readlines()
-
-        sequence_info = cls._create_sequences(data, max_sequence_length)
+            # data = f.readlines()
+            # sequence_info = cls._create_sequences(data, max_sequence_length)
+            # (
+            #     user_sequences,
+            #     item_sequences,
+            #     max_user_id,
+            #     max_item_id,
+            #     max_sequence_len,
+            # ) = sequence_info
+            sequence_info = cls._create_sequences(f, max_sequence_length)
         (
             user_sequences,
             item_sequences,
@@ -251,9 +258,6 @@ class SequenceDataset(BaseDataset, config_name="sequence"):
 
         dataset = []
         for user_id, item_ids in zip(user_sequences, item_sequences):
-            # TODO (Object Overhead): Storing data as a list of dictionaries (Array of Structures).
-            # This creates millions of small objects in the heap, bloating RAM and killing cache locality.
-            # Recommendation: Switch to Structure of Arrays (SoA) using dense NumPy arrays for user_ids, item_ids, etc.
             dataset.append(
                 {
                     "user.ids": [user_id],
