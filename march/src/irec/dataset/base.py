@@ -211,6 +211,12 @@ class SequenceDataset(BaseDataset, config_name="sequence"):
         if use_cached and os.path.exists(cache_path):
             logger.info("Loading cached dataset from {}".format(cache_path))
             with open(cache_path, "rb") as f:
+                # TODO (Serialization): pickle.load() is slow and single-threaded.
+                # For large datasets (5GB+), this causes massive RAM spikes and long startup times.
+                # Recommendation: Use Memory-mapped files (numpy.memmap) or HDF5 for O(1) loading.
+
+                # crazy resourсe leak!
+                # WARNING!!!!!!!!! probably risky on yandex datasphere need test
                 return pickle.load(f)
 
         return cls._build_and_cache_dataset(
@@ -230,6 +236,8 @@ class SequenceDataset(BaseDataset, config_name="sequence"):
         logger.info("Creating a dataset from {}...".format(dataset_path))
 
         with open(dataset_path, "r") as f:
+            # TODO (Memory Management): f.readlines() loads the entire file into RAM as heavy Python strings.
+            # Recommendation: Use a generator 'for line in f:' to process line-by-line or read as a binary buffer.
             data = f.readlines()
 
         sequence_info = cls._create_sequences(data, max_sequence_length)
@@ -243,6 +251,9 @@ class SequenceDataset(BaseDataset, config_name="sequence"):
 
         dataset = []
         for user_id, item_ids in zip(user_sequences, item_sequences):
+            # TODO (Object Overhead): Storing data as a list of dictionaries (Array of Structures).
+            # This creates millions of small objects in the heap, bloating RAM and killing cache locality.
+            # Recommendation: Switch to Structure of Arrays (SoA) using dense NumPy arrays for user_ids, item_ids, etc.
             dataset.append(
                 {
                     "user.ids": [user_id],
@@ -278,6 +289,9 @@ class SequenceDataset(BaseDataset, config_name="sequence"):
         max_sequence_length = 0
 
         for sample in data:
+            # TODO (CPU Bottleneck): Single-threaded string parsing (split, int, strip).
+            # While one core is busy parsing gigabytes of text, other 15+ cores are idle.
+            # Recommendation: Use multiprocessing.Pool to parse chunks of lines in parallel.
             sample = sample.strip("\n").split(" ")
             item_ids = [int(item_id) for item_id in sample[1:]][-max_sample_len:]
             user_id = int(sample[0])
@@ -434,11 +448,10 @@ class GraphDataset(BaseDataset, config_name="graph"):
                     if source_entity == connected_entity:
                         continue
 
-                    pair_key = (source_entity, connected_entity)
-                    # if pair_key in visited_entity_pairs:
-                    # continue
-
-                    # visited_entity_pairs.add(pair_key)
+                    # TODO (Algorithmic Efficiency): Manual nested loops in Python to find co-occurrences.
+                    # This is essentially computing A * A^T (matrix multiplication) but in O(N*M) Python loops.
+                    # Recommendation: Use Scipy sparse matrix multiplication (A.dot(A.T)) which is implemented in C++/Fortran.
+                    # It's orders of magnitude faster and handles the "visited" logic naturally.
                     interactions_fst.append(source_entity)
                     interactions_snd.append(connected_entity)
 
@@ -494,6 +507,11 @@ class GraphDataset(BaseDataset, config_name="graph"):
 
         train_user_2_items = defaultdict(set)
         train_item_2_users = defaultdict(set)
+        # TODO (Memory Footprint): A Python set of millions of tuples (user_id, item_id).
+        # Each tuple is a separate Python object with its own overhead (24-48 bytes).
+        # For 10M interactions, this 'visited' set can consume several gigabytes of RAM.
+        # Recommendation: Use a single 1D NumPy array where each element is (user_id << 32 | item_id)
+        # or use a sparse adjacency matrix to track seen pairs.
         visited_user_item_pairs = set()
 
         samplers_to_process = [train_sampler]
@@ -505,6 +523,8 @@ class GraphDataset(BaseDataset, config_name="graph"):
                 user_id = sample["user.ids"][0]
                 for item_id in sample["item.ids"]:
                     if (user_id, item_id) not in visited_user_item_pairs:
+                        # TODO (Dynamic Allocation): Repeated list.append() causes frequent memory reallocations.
+                        # Recommendation: Pre-allocate NumPy arrays (np.empty) if the total number of interactions is known or estimable.
                         train_interactions.append((user_id, item_id))
                         train_user_interactions.append(user_id)
                         train_item_interactions.append(item_id)
@@ -628,6 +648,10 @@ class GraphDataset(BaseDataset, config_name="graph"):
 
     @staticmethod
     def _convert_sp_mat_to_sp_tensor(X):
+        # TODO (Data Redundancy): Multiple conversions Scipy COO -> Numpy -> Torch Tensor.
+        # Each step (coo.row, coo.col, coo.data) creates a new copy of the graph indices/values.
+        # Recommendation: Use torch.sparse_csr_tensor if possible, or build the tensor
+        # directly from the underlying CSR buffers (indptr, indices, data) to save memory.
         coo = X.tocoo().astype(np.float32)
         row = torch.Tensor(coo.row).long()
         col = torch.Tensor(coo.col).long()
