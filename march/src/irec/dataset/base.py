@@ -296,6 +296,8 @@ class SequenceDataset(BaseDataset, config_name="sequence"):
             # TODO (CPU Bottleneck): Single-threaded string parsing (split, int, strip).
             # While one core is busy parsing gigabytes of text, other 15+ cores are idle.
             # Recommendation: Use multiprocessing.Pool to parse chunks of lines in parallel.
+
+            # WARNING!!!!!!!!! probably risky on yandex datasphere need test
             sample = sample.strip("\n").split(" ")
             item_ids = [int(item_id) for item_id in sample[1:]][-max_sample_len:]
             user_id = int(sample[0])
@@ -396,16 +398,13 @@ class GraphDataset(BaseDataset, config_name="graph"):
     ):
         if entity_type not in ["user", "item"]:
             raise ValueError("entity_type must be either 'user' or 'item'")
-        # have to delete and replace to not delete npz each time manually
-        # path_to_graph = os.path.join(self._graph_dir_path, '{}_graph.npz'.format(entity_type))
-
-        # instead better use such construction
-
         # neighborhood_size
         # The neighborhood_size is a filter that constrains the number of edges for each user or
         # item node in the graph.
         # k=50 implies that for each user, we find all possible neighbors, sort them based on
         # co-occurrence counts, and keep only the top 50. All other connections are removed from the graph.
+
+        # SANITY CHECKED
         k_suffix = (
             f"k{self._neighborhood_size}"
             if self._neighborhood_size is not None
@@ -430,6 +429,7 @@ class GraphDataset(BaseDataset, config_name="graph"):
             # ..the weight of each edge denotes the number of co-action behaviors between user i and user j
 
             # visited_entity_pairs = set()
+            # SANITY CHECKED
 
             for user_id, item_id in tqdm(
                 zip(train_user_interactions, train_item_interactions),
@@ -557,40 +557,6 @@ class GraphDataset(BaseDataset, config_name="graph"):
             neighborhood_size=config.get("neighborhood_size", None),
         )
 
-    # @staticmethod
-    # def get_sparse_graph_layer(
-    #     sparse_matrix,
-    #     fst_dim,
-    #     snd_dim,
-    #     biparite=False,
-    # ):
-    #     if not biparite:
-    #         adj_mat = sparse_matrix.tocsr()
-    #     else:
-    #         R = sparse_matrix.tocsr()
-
-    #         upper_right = R
-    #         lower_left = R.T
-
-    #         upper_left = sp.csr_matrix((fst_dim, fst_dim))
-    #         lower_right = sp.csr_matrix((snd_dim, snd_dim))
-
-    #         adj_mat = sp.bmat([
-    #             [upper_left, upper_right],
-    #             [lower_left, lower_right]
-    #         ])
-    #         assert adj_mat.shape == (fst_dim + snd_dim, fst_dim + snd_dim), (
-    #         f"Got shape {adj_mat.shape}, expected {(fst_dim+snd_dim, fst_dim+snd_dim)}"
-    #         )
-
-    #     rowsum = np.array(adj_mat.sum(1))
-    #     d_inv = np.power(rowsum, -0.5).flatten()
-    #     d_inv[np.isinf(d_inv)] = 0.
-    #     d_mat_inv = sp.diags(d_inv)
-
-    #     norm_adj = d_mat_inv.dot(adj_mat).dot(d_mat_inv)
-    #     return norm_adj.tocsr()
-
     @staticmethod
     def get_sparse_graph_layer(
         sparse_matrix,
@@ -622,6 +588,8 @@ class GraphDataset(BaseDataset, config_name="graph"):
         # d_mat_inv = sp.diags(d_inv)
         # norm_adj = d_mat_inv.dot(adj_mat).dot(d_mat_inv)
         # return norm_adj.tocsr()
+
+        # SANITY CHECKED
 
         # --- NEW OPTIMIZED IMPLEMENTATION ---
         """
@@ -690,6 +658,9 @@ class GraphDataset(BaseDataset, config_name="graph"):
            time. Slicing the underlying NumPy arrays is performed at near-C speed,
            making this orders of magnitude faster than Python-level list operations.
         """
+
+        # SANITY CHECKED
+
         mat = matrix.tocsr()
 
         for i in range(mat.shape[0]):
