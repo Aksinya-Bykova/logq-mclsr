@@ -729,18 +729,49 @@ class GraphDataset(BaseDataset, config_name="graph"):
 
         return norm_adj.tocsr()
 
+    # @staticmethod
+    # def _convert_sp_mat_to_sp_tensor(X):
+    #     # TODO (Data Redundancy): Multiple conversions Scipy COO -> Numpy -> Torch Tensor.
+    #     # Each step (coo.row, coo.col, coo.data) creates a new copy of the graph indices/values.
+    #     # Recommendation: Use torch.sparse_csr_tensor if possible, or build the tensor
+    #     # directly from the underlying CSR buffers (indptr, indices, data) to save memory.
+    #     coo = X.tocoo().astype(np.float32)
+    #     row = torch.Tensor(coo.row).long()
+    #     col = torch.Tensor(coo.col).long()
+    #     index = torch.stack([row, col])
+    #     data = torch.FloatTensor(coo.data)
+    #     return torch.sparse.FloatTensor(index, data, torch.Size(coo.shape))
+
     @staticmethod
     def _convert_sp_mat_to_sp_tensor(X):
-        # TODO (Data Redundancy): Multiple conversions Scipy COO -> Numpy -> Torch Tensor.
-        # Each step (coo.row, coo.col, coo.data) creates a new copy of the graph indices/values.
-        # Recommendation: Use torch.sparse_csr_tensor if possible, or build the tensor
-        # directly from the underlying CSR buffers (indptr, indices, data) to save memory.
-        coo = X.tocoo().astype(np.float32)
-        row = torch.Tensor(coo.row).long()
-        col = torch.Tensor(coo.col).long()
-        index = torch.stack([row, col])
-        data = torch.FloatTensor(coo.data)
-        return torch.sparse.FloatTensor(index, data, torch.Size(coo.shape))
+        """
+        Optimized conversion from Scipy sparse matrix to PyTorch sparse COO tensor.
+
+        Why the original was 'painful' for memory:
+        1. X.tocoo() creates a full copy in COO format.
+        2. .astype(np.float32) creates ANOTHER copy if it wasn't float32.
+        3. torch.Tensor(...) always copies data.
+        4. torch.stack(...) creates yet another temporary object.
+
+        Optimized approach:
+        - Use torch.from_numpy() which shares the underlying memory (Zero-Copy)
+          wherever possible.
+        - Minimize intermediate Python list/tuple creations.
+        """
+        # Ensure we are in COO format (required for the standard Torch sparse API)
+        coo = X.tocoo()
+
+        # Use from_numpy to share memory with Scipy's internal arrays.
+        # Note: indices must be long (int64). data should be float32.
+        values = torch.from_numpy(coo.data).float()
+
+        # Vstack indices and convert to Long in one go.
+        # coo.row and coo.col are typically int32 or int64 numpy arrays.
+        indices = torch.from_numpy(np.vstack((coo.row, coo.col))).long()
+
+        # Use the modern sparse_coo_tensor constructor
+        shape = torch.Size(coo.shape)
+        return torch.sparse_coo_tensor(indices, values, shape)
 
     @staticmethod
     def _filter_matrix_by_top_k(matrix, k):
