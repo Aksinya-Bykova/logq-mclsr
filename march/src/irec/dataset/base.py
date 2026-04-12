@@ -258,6 +258,7 @@ class SequenceDataset(BaseDataset, config_name="sequence"):
 
         dataset = []
         for user_id, item_ids in zip(user_sequences, item_sequences):
+            # TODO bad practice but have change git item
             dataset.append(
                 {
                     "user.ids": [user_id],
@@ -731,7 +732,7 @@ class GraphDataset(BaseDataset, config_name="graph"):
 
     # @staticmethod
     # def _convert_sp_mat_to_sp_tensor(X):
-    #     # TODO (Data Redundancy): Multiple conversions Scipy COO -> Numpy -> Torch Tensor.
+    #     # todo (Data Redundancy): Multiple conversions Scipy COO -> Numpy -> Torch Tensor.
     #     # Each step (coo.row, coo.col, coo.data) creates a new copy of the graph indices/values.
     #     # Recommendation: Use torch.sparse_csr_tensor if possible, or build the tensor
     #     # directly from the underlying CSR buffers (indptr, indices, data) to save memory.
@@ -961,6 +962,7 @@ class ScientificDataset(BaseSequenceDataset, config_name="scientific"):
 
                 datasets[part_name].append(
                     {
+                        # TODO bad practice but have change git item
                         "user.ids": [user_id],
                         "user.length": 1,
                         "item.ids": final_items,
