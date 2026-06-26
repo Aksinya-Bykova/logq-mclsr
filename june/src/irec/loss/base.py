@@ -19,12 +19,12 @@ class TorchLoss(BaseLoss, nn.Module):
     pass
 
 
-class IdentityLoss(BaseLoss, config_name='identity'):
+class IdentityLoss(BaseLoss, config_name="identity"):
     def __call__(self, inputs):
         return inputs
 
 
-class CompositeLoss(TorchLoss, config_name='composite'):
+class CompositeLoss(TorchLoss, config_name="composite"):
     def __init__(self, losses, weights=None, output_prefix=None):
         super().__init__()
         self._losses = losses
@@ -36,8 +36,8 @@ class CompositeLoss(TorchLoss, config_name='composite'):
         losses = []
         weights = []
 
-        for loss_cfg in copy.deepcopy(config)['losses']:
-            weight = loss_cfg.pop('weight') if 'weight' in loss_cfg else 1.0
+        for loss_cfg in copy.deepcopy(config)["losses"]:
+            weight = loss_cfg.pop("weight") if "weight" in loss_cfg else 1.0
             loss_function = BaseLoss.create_from_config(loss_cfg)
 
             weights.append(weight)
@@ -46,7 +46,7 @@ class CompositeLoss(TorchLoss, config_name='composite'):
         return cls(
             losses=losses,
             weights=weights,
-            output_prefix=config.get('output_prefix'),
+            output_prefix=config.get("output_prefix"),
         )
 
     def forward(self, inputs):
@@ -60,7 +60,7 @@ class CompositeLoss(TorchLoss, config_name='composite'):
         return total_loss
 
 
-class FpsLoss(TorchLoss, config_name='fps'):
+class FpsLoss(TorchLoss, config_name="fps"):
     def __init__(
         self,
         fst_embeddings_prefix,
@@ -75,7 +75,7 @@ class FpsLoss(TorchLoss, config_name='fps'):
         self._snd_embeddings_prefix = snd_embeddings_prefix
         self._tau = tau
         self._loss_function = nn.CrossEntropyLoss(
-            reduction='mean' if use_mean else 'sum',
+            reduction="mean" if use_mean else "sum",
         )
         self._normalize_embeddings = normalize_embeddings
         self._output_prefix = output_prefix
@@ -84,21 +84,17 @@ class FpsLoss(TorchLoss, config_name='fps'):
     @classmethod
     def create_from_config(cls, config, **kwargs):
         return cls(
-            fst_embeddings_prefix=config['fst_embeddings_prefix'],
-            snd_embeddings_prefix=config['snd_embeddings_prefix'],
-            tau=config.get('temperature', 1.0), 
-            normalize_embeddings=config.get('normalize_embeddings', False),
-            use_mean=config.get('use_mean', True),
-            output_prefix=config.get('output_prefix')
+            fst_embeddings_prefix=config["fst_embeddings_prefix"],
+            snd_embeddings_prefix=config["snd_embeddings_prefix"],
+            tau=config.get("temperature", 1.0),
+            normalize_embeddings=config.get("normalize_embeddings", False),
+            use_mean=config.get("use_mean", True),
+            output_prefix=config.get("output_prefix"),
         )
 
     def forward(self, inputs):
-        fst_embeddings = inputs[
-            self._fst_embeddings_prefix
-        ]  # (x, embedding_dim)
-        snd_embeddings = inputs[
-            self._snd_embeddings_prefix
-        ]  # (x, embedding_dim)
+        fst_embeddings = inputs[self._fst_embeddings_prefix]  # (x, embedding_dim)
+        snd_embeddings = inputs[self._snd_embeddings_prefix]  # (x, embedding_dim)
 
         batch_size = fst_embeddings.shape[0]
 
@@ -125,7 +121,9 @@ class FpsLoss(TorchLoss, config_name='fps'):
                 torch.diag(similarity_scores, -batch_size),
             ),
             dim=0,
-        ).reshape(2 * batch_size, 1)  # (2 * x, 1)
+        ).reshape(
+            2 * batch_size, 1
+        )  # (2 * x, 1)
         assert torch.allclose(
             torch.diag(similarity_scores, batch_size),
             torch.diag(similarity_scores, -batch_size),
@@ -162,14 +160,9 @@ class FpsLoss(TorchLoss, config_name='fps'):
         return loss
 
 
-class SASRecLoss(TorchLoss, config_name='sasrec'):
+class SASRecLoss(TorchLoss, config_name="sasrec"):
 
-    def __init__(
-            self,
-            positive_prefix,
-            negative_prefix,
-            output_prefix=None
-    ):
+    def __init__(self, positive_prefix, negative_prefix, output_prefix=None):
         super().__init__()
         self._positive_prefix = positive_prefix
         self._negative_prefix = negative_prefix
@@ -192,7 +185,7 @@ class SASRecLoss(TorchLoss, config_name='sasrec'):
         return loss
 
 
-class SamplesSoftmaxLoss(TorchLoss, config_name='sampled_softmax'):
+class SamplesSoftmaxLoss(TorchLoss, config_name="sampled_softmax"):
     def __init__(
         self,
         queries_prefix,
@@ -207,9 +200,7 @@ class SamplesSoftmaxLoss(TorchLoss, config_name='sampled_softmax'):
         self._output_prefix = output_prefix
 
     def forward(self, inputs):
-        queries_embeddings = inputs[
-            self._queries_prefix
-        ]  # (batch_size, embedding_dim)
+        queries_embeddings = inputs[self._queries_prefix]  # (batch_size, embedding_dim)
         positive_embeddings = inputs[
             self._positive_prefix
         ]  # (batch_size, embedding_dim)
@@ -219,15 +210,17 @@ class SamplesSoftmaxLoss(TorchLoss, config_name='sampled_softmax'):
 
         # b -- batch_size, d -- embedding_dim
         positive_scores = torch.einsum(
-            'bd,bd->b',
+            "bd,bd->b",
             queries_embeddings,
             positive_embeddings,
-        ).unsqueeze(-1)  # (batch_size, 1)
+        ).unsqueeze(
+            -1
+        )  # (batch_size, 1)
 
         if negative_embeddings.dim() == 2:  # (num_negatives, embedding_dim)
             # b -- batch_size, n -- num_negatives, d -- embedding_dim
             negative_scores = torch.einsum(
-                'bd,nd->bn',
+                "bd,nd->bn",
                 queries_embeddings,
                 negative_embeddings,
             )  # (batch_size, num_negatives)
@@ -237,7 +230,7 @@ class SamplesSoftmaxLoss(TorchLoss, config_name='sampled_softmax'):
             )  # (batch_size, num_negatives, embedding_dim)
             # b -- batch_size, n -- num_negatives, d -- embedding_dim
             negative_scores = torch.einsum(
-                'bd,bnd->bn',
+                "bd,bnd->bn",
                 queries_embeddings,
                 negative_embeddings,
             )  # (batch_size, num_negatives)
@@ -259,70 +252,22 @@ class SamplesSoftmaxLoss(TorchLoss, config_name='sampled_softmax'):
         return loss
 
 
-class MCLSRLoss(TorchLoss, config_name='mclsr'):
-    def __init__(
-        self,
-        all_scores_prefix,
-        mask_prefix,
-        normalize_embeddings=False,
-        tau=1.0,
-        output_prefix=None,
-    ):
-        super().__init__()
-        self._all_scores_prefix = all_scores_prefix
-        self._mask_prefix = mask_prefix
-        self._normalize_embeddings = normalize_embeddings
-        self._output_prefix = output_prefix
-        self._tau = tau
-
-    def forward(self, inputs):
-        all_scores = inputs[
-            self._all_scores_prefix
-        ]  # (batch_size, batch_size, seq_len)
-        mask = inputs[self._mask_prefix]  # (batch_size)
-
-        batch_size = mask.shape[0]
-        seq_len = mask.shape[1]
-
-        positive_mask = torch.eye(batch_size, device=mask.device).bool()
-
-        positive_scores = all_scores[positive_mask]  # (batch_size, seq_len)
-        negative_scores = torch.reshape(
-            all_scores[~positive_mask],
-            shape=(batch_size, batch_size - 1, seq_len),
-        )  # (batch_size, batch_size - 1, seq_len)
-        assert torch.allclose(all_scores[0, 1], negative_scores[0, 0])
-        assert torch.allclose(all_scores[-1, -2], negative_scores[-1, -1])
-        assert torch.allclose(all_scores[0, 0], positive_scores[0])
-        assert torch.allclose(all_scores[-1, -1], positive_scores[-1])
-
-        # Maybe try mean over sequence TODO
-        loss = torch.sum(
-            torch.log(
-                torch.sigmoid(positive_scores.unsqueeze(1) - negative_scores),
-            ),
-        )  # (1)
-
-        if self._output_prefix is not None:
-            inputs[self._output_prefix] = loss.cpu().item()
-
-        return loss
-    
-class MCLSRLogqLoss(TorchLoss, config_name='mclsr_logq_special'):
+class MCLSRLogqInBatchLoss(TorchLoss, config_name="mclsr_logq_inbatch"):
     """
-    LogQ-corrected Sampled Softmax Loss for MCLSR model.
-    Implements sampling-bias correction: s_c(x, y) = s(x, y) - lambda * log(p_j)
-    
-    This adjustment compensates for non-uniform negative sampling (e.g., popularity-based),
-    preventing the model from over-penalizing popular items.
+    LogQ-corrected In-Batch Sampled Softmax Loss for MCLSR model.
+
+    Uses in-batch negatives: positive items of other users in the batch serve as negatives.
+    This naturally produces a popularity-proportional sampling distribution,
+    which LogQ correction precisely compensates.
+
+    LogQ correction is applied only to negatives (not to the positive).
     """
+
     def __init__(
         self,
         queries_prefix,
         positive_prefix,
-        negative_prefix,
         positive_ids_prefix,
-        negative_ids_prefix,
         path_to_item_counts,
         logq_lambda=1.0,
         output_prefix=None,
@@ -330,83 +275,67 @@ class MCLSRLogqLoss(TorchLoss, config_name='mclsr_logq_special'):
         super().__init__()
         self._queries_prefix = queries_prefix
         self._positive_prefix = positive_prefix
-        self._negative_prefix = negative_prefix
         self._positive_ids_prefix = positive_ids_prefix
-        self._negative_ids_prefix = negative_ids_prefix
         self._output_prefix = output_prefix
         self._logq_lambda = logq_lambda
 
-        # Load global item frequencies to calculate sampling probabilities (p_j)
         if not os.path.exists(path_to_item_counts):
-            raise FileNotFoundError(f"Item counts file not found at {path_to_item_counts}")
+            raise FileNotFoundError(
+                f"Item counts file not found at {path_to_item_counts}"
+            )
 
-        with open(path_to_item_counts, 'rb') as f:
+        with open(path_to_item_counts, "rb") as f:
             counts = pickle.load(f)
-        
+
         counts_tensor = torch.tensor(counts, dtype=torch.float32)
-        
-        # Calculate log-probabilities. 
-        # Clamp used for numerical stability to avoid log(0) resulting in NaN.
         probs = torch.clamp(counts_tensor / counts_tensor.sum(), min=1e-10)
         log_q = torch.log(probs)
-        
-        # register_buffer ensures the lookup table is moved to the correct 
-        # device (GPU/CPU) automatically during training.
-        self.register_buffer('_log_q_table', log_q)
+        self.register_buffer("_log_q_table", log_q)
 
     @classmethod
     def create_from_config(cls, config, **kwargs):
-        """Factory method to initialize loss from JSON configuration."""
         return cls(
-            queries_prefix=config['queries_prefix'],
-            positive_prefix=config['positive_prefix'],
-            negative_prefix=config['negative_prefix'],
-            positive_ids_prefix=config['positive_ids_prefix'],
-            negative_ids_prefix=config['negative_ids_prefix'],
-            path_to_item_counts=config['path_to_item_counts'],
-            logq_lambda=config.get('logq_lambda', 1.0),
-            output_prefix=config.get('output_prefix')
+            queries_prefix=config["queries_prefix"],
+            positive_prefix=config["positive_prefix"],
+            positive_ids_prefix=config["positive_ids_prefix"],
+            path_to_item_counts=config["path_to_item_counts"],
+            logq_lambda=config.get("logq_lambda", 1.0),
+            output_prefix=config.get("output_prefix"),
         )
 
     def forward(self, inputs):
-        # 1. Extract embeddings and item IDs
-        queries = inputs[self._queries_prefix]           # (Batch, Dim)
-        pos_embs = inputs[self._positive_prefix]         # (Batch, Dim)
-        neg_embs = inputs[self._negative_prefix]         # (Batch, NumNegs, Dim)
-        
-        pos_ids = inputs[self._positive_ids_prefix]      # (Batch)
-        neg_ids = inputs[self._negative_ids_prefix]      # (Batch, NumNegs)
+        queries = inputs[self._queries_prefix]  # (B, D)
+        pos_embs = inputs[self._positive_prefix]  # (B, D)
+        pos_ids = inputs[self._positive_ids_prefix]  # (B,)
 
-        # Device synchronization check
         if self._log_q_table.device != queries.device:
             self._log_q_table = self._log_q_table.to(queries.device)
 
-        # 2. Compute raw scores (Dot Product)
-        # Using einsum for efficient multiplication of 2D queries and 3D negatives
-        pos_scores = torch.einsum('bd,bd->b', queries, pos_embs).unsqueeze(-1) # (B, 1)
-        neg_scores = torch.einsum('bd,bnd->bn', queries, neg_embs)             # (B, N)
+        batch_size = queries.size(0)
 
-        # 3. False Negative Masking
-        # Neutralize cases where the sampled negative item is actually the target item
-        false_negative_mask = (pos_ids.unsqueeze(1) == neg_ids)
-        neg_scores = neg_scores.masked_fill(false_negative_mask, -1e12)
+        # All-pairs scores: each query against all positive items in batch
+        # all_scores[i, j] = query_i · pos_emb_j
+        # Diagonal (i, i) = positive score, off-diagonal = in-batch negatives
+        all_scores = torch.mm(queries, pos_embs.T)  # (B, B)
 
-        # 4. Apply LogQ Correction
-        # Correction term: score = score - lambda * log(p_j)
-        log_q_pos = self._log_q_table[pos_ids].unsqueeze(-1) # (B, 1)
-        log_q_neg = self._log_q_table[neg_ids]               # (B, N)
-        
-        pos_scores = pos_scores - (self._logq_lambda * log_q_pos)
-        neg_scores = neg_scores - (self._logq_lambda * log_q_neg)
+        # LogQ correction on negatives only:
+        # 1) Apply correction to ALL candidates (columns)
+        # 2) Undo correction on the diagonal (positives)
+        log_q = self._log_q_table[pos_ids]  # (B,)
+        all_scores = all_scores - self._logq_lambda * log_q.unsqueeze(0)  # (B, B)
+        all_scores.diagonal().add_(self._logq_lambda * log_q)
 
-        # 5. Final Softmax Reranking
-        # Concatenate scores and compute cross-entropy over the sampled items
-        all_scores = torch.cat([pos_scores, neg_scores], dim=1) # (B, 1+N)
-        loss = -torch.log_softmax(all_scores, dim=1)[:, 0]
-        
-        final_loss = loss.mean()
+        # False negative masking: if pos_ids[i] == pos_ids[j] and i != j,
+        # then user j's positive is actually the same item as user i's positive
+        false_neg_mask = pos_ids.unsqueeze(0) == pos_ids.unsqueeze(1)  # (B, B)
+        false_neg_mask.fill_diagonal_(False)
+        all_scores = all_scores.masked_fill(false_neg_mask, -1e12)
+
+        # Cross-entropy: positive is the diagonal (target index i for row i)
+        labels = torch.arange(batch_size, device=queries.device)
+        loss = torch.nn.functional.cross_entropy(all_scores, labels)
+
         if self._output_prefix:
-            inputs[self._output_prefix] = final_loss.cpu().item()
-            
-        return final_loss
+            inputs[self._output_prefix] = loss.cpu().item()
 
+        return loss
