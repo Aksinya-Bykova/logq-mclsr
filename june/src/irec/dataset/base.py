@@ -211,12 +211,6 @@ class SequenceDataset(BaseDataset, config_name="sequence"):
         if use_cached and os.path.exists(cache_path):
             logger.info("Loading cached dataset from {}".format(cache_path))
             with open(cache_path, "rb") as f:
-                # TODO (Serialization): pickle.load() is slow and single-threaded.
-                # For large datasets (5GB+), this causes massive RAM spikes and long startup times.
-                # Recommendation: Use Memory-mapped files (numpy.memmap) or HDF5 for O(1) loading.
-
-                # crazy resourсe leak!
-                # WARNING!!!!!!!!! probably risky on yandex datasphere need test
                 return pickle.load(f)
 
         return cls._build_and_cache_dataset(
@@ -236,17 +230,6 @@ class SequenceDataset(BaseDataset, config_name="sequence"):
         logger.info("Creating a dataset from {}...".format(dataset_path))
 
         with open(dataset_path, "r") as f:
-            # (Memory Management): f.readlines() loads the entire file into RAM as heavy Python strings.
-            # Recommendation: Use a generator 'for line in f:' to process line-by-line or read as a binary buffer.
-            # data = f.readlines()
-            # sequence_info = cls._create_sequences(data, max_sequence_length)
-            # (
-            #     user_sequences,
-            #     item_sequences,
-            #     max_user_id,
-            #     max_item_id,
-            #     max_sequence_len,
-            # ) = sequence_info
             sequence_info = cls._create_sequences(f, max_sequence_length)
         (
             user_sequences,
@@ -258,7 +241,6 @@ class SequenceDataset(BaseDataset, config_name="sequence"):
 
         dataset = []
         for user_id, item_ids in zip(user_sequences, item_sequences):
-            # TODO bad practice but have change git item
             dataset.append(
                 {
                     "user.ids": [user_id],
@@ -294,11 +276,6 @@ class SequenceDataset(BaseDataset, config_name="sequence"):
         max_sequence_length = 0
 
         for sample in data:
-            # TODO (CPU Bottleneck): Single-threaded string parsing (split, int, strip).
-            # While one core is busy parsing gigabytes of text, other 15+ cores are idle.
-            # Recommendation: Use multiprocessing.Pool to parse chunks of lines in parallel.
-
-            # WARNING!!!!!!!!! probably risky on yandex datasphere need test
             sample = sample.strip("\n").split(" ")
             item_ids = [int(item_id) for item_id in sample[1:]][-max_sample_len:]
             user_id = int(sample[0])
@@ -399,13 +376,6 @@ class GraphDataset(BaseDataset, config_name="graph"):
     ):
         if entity_type not in ["user", "item"]:
             raise ValueError("entity_type must be either 'user' or 'item'")
-        # neighborhood_size
-        # The neighborhood_size is a filter that constrains the number of edges for each user or
-        # item node in the graph.
-        # k=50 implies that for each user, we find all possible neighbors, sort them based on
-        # co-occurrence counts, and keep only the top 50. All other connections are removed from the graph.
-
-        # SANITY CHECKED
         k_suffix = (
             f"k{self._neighborhood_size}"
             if self._neighborhood_size is not None
@@ -418,90 +388,9 @@ class GraphDataset(BaseDataset, config_name="graph"):
         is_user_graph = entity_type == "user"
         num_entities = self._num_users if is_user_graph else self._num_items
 
-        # if os.path.exists(path_to_graph):
-        #     graph_matrix = sp.load_npz(path_to_graph)
-        # else:
-        #     interactions_fst = []
-        #     interactions_snd = []
-        #     visited_user_item_pairs = set()
-        #     # have to delete cause
-        #     # 3.2 Graph Construction
-        #     # User-user/item-item graph
-        #     # ..the weight of each edge denotes the number of co-action behaviors between user i and user j
-
-        #     # SANITY CHECKED
-
-        #     for user_id, item_id in tqdm(
-        #         zip(train_user_interactions, train_item_interactions),
-        #         desc="Building {}-{} graph".format(
-        #             entity_type, entity_type
-        #     ):
-        #         if (user_id, item_id) in visited_user_item_pairs:
-        #             continue
-        #         visited_user_item_pairs.add((user_id, item_id))
-
-        #         source_entity = user_id if is_user_graph else item_id
-        #         connection_map = (
-        #             train_item_2_users if is_user_graph else train_user_2_items
-        #         )
-        #         connection_point = item_id if is_user_graph else user_id
-
-        #         for connected_entity in connection_map[connection_point]:
-        #             if source_entity == connected_entity:
-        #                 continue
-
-        #             # todo (Algorithmic Efficiency): Manual nested loops in Python to find co-occurrences.
-        #             # This is essentially computing A * A^T (matrix multiplication) but in O(N*M) Python loops.
-        #             # Recommendation: Use Scipy sparse matrix multiplication (A.dot(A.T)) which is implemented in C++/Fortran.
-        #             # It's orders of magnitude faster and handles the "visited" logic naturally.
-        #             interactions_fst.append(source_entity)
-        #             interactions_snd.append(connected_entity)
-
-        #     connections = csr_matrix(
-        #         (np.ones(len(interactions_fst)), (interactions_fst, interactions_snd)),
-        #         shape=(num_entities + 2, num_entities + 2),
-        #     )
-
-        #     if self._neighborhood_size is not None:
-        #         connections = self._filter_matrix_by_top_k(
-        #             connections, self._neighborhood_size
-        #         )
-
-        #     graph_matrix = self.get_sparse_graph_layer(
-        #         connections, num_entities + 2, num_entities + 2, biparite=False
-        #     )
-        #     sp.save_npz(path_to_graph, graph_matrix)
-
         if os.path.exists(path_to_graph):
             graph_matrix = sp.load_npz(path_to_graph)
         else:
-            # --- OPTIMIZED GRAPH CONSTRUCTION (Systems-oriented approach) ---
-            """
-            MATHEMATICAL JUSTIFICATION:
-            The original manual implementation aimed to build a similarity graph where each edge
-            weight represents the number of "co-action" behaviors (shared interactions).
-
-            1. Manual approach: For every (user, item) pair, we find all other users who interacted
-               with the same item and increment their similarity. This is an O(N * M) operation
-               in Python, which is extremely slow due to object overhead and interpreter speed.
-
-            2. Matrix approach: This is exactly the definition of Sparse Matrix Multiplication.
-               If R is a binary User-Item interaction matrix:
-               - User-User Graph: A = R * R^T. The element A[u1, u2] is the dot product of rows
-                 u1 and u2, which equals the number of items both users interacted with.
-               - Item-Item Graph: A = R^T * R. The element A[i1, i2] is the dot product of columns
-                 i1 and i2, which equals the number of users who interacted with both items.
-
-            3. Safety & Logic:
-               - The 'visited_user_item_pairs' logic is naturally handled by creating a binary
-                 CSR matrix (where values are 1 if an interaction exists).
-               - The 'source_entity == connected_entity' exclusion is handled by zeroing the
-                 diagonal of the resulting matrix (setdiag(0)).
-               - Shape consistency is maintained using (num_users + 2) and (num_items + 2).
-            """
-
-            # Step 1: Create a binary interaction matrix R (User-Item)
-            # We use a binary matrix to count unique co-actions (replaces visited_user_item_pairs)
             R = csr_matrix(
                 (
                     np.ones(len(train_user_interactions)),
@@ -510,28 +399,19 @@ class GraphDataset(BaseDataset, config_name="graph"):
                 shape=(self._num_users + 2, self._num_items + 2),
             )
 
-            # Step 2: Perform matrix multiplication to find co-occurrences
-            # This replaces the nested 'for connected_entity in connection_map' loops
             if is_user_graph:
-                # User-User: How many items did both users interact with?
                 connections = R.dot(R.T)
             else:
-                # Item-Item: How many users interacted with both items?
                 connections = R.T.dot(R)
 
-            # Step 3: Remove self-loops and explicit zeros
-            # This replaces 'if source_entity == connected_entity: continue'
             connections.setdiag(0)
             connections.eliminate_zeros()
 
-            # --- RESUME ORIGINAL PIPELINE ---
-            # Now 'connections' is a CSR matrix identical to the one built manually before
             if self._neighborhood_size is not None:
                 connections = self._filter_matrix_by_top_k(
                     connections, self._neighborhood_size
                 )
 
-            # Normalize the graph (Symmetric Normalization: D^-0.5 * A * D^-0.5)
             graph_matrix = self.get_sparse_graph_layer(
                 connections, num_entities + 2, num_entities + 2, biparite=False
             )
@@ -566,63 +446,12 @@ class GraphDataset(BaseDataset, config_name="graph"):
 
         return self._convert_sp_mat_to_sp_tensor(graph_matrix).coalesce().to(DEVICE)
 
-    # def _collect_interactions(self, train_sampler, validation_sampler, test_sampler):
-    #     train_interactions = []
-    #     train_user_interactions, train_item_interactions = [], []
-
-    #     train_user_2_items = defaultdict(set)
-    #     train_item_2_users = defaultdict(set)
-    #     # todo (Memory Footprint): A Python set of millions of tuples (user_id, item_id).
-    #     # Each tuple is a separate Python object with its own overhead (24-48 bytes).
-    #     # For 10M interactions, this 'visited' set can consume several gigabytes of RAM.
-    #     # Recommendation: Use a single 1D NumPy array where each element is (user_id << 32 | item_id)
-    #     # or use a sparse adjacency matrix to track seen pairs.
-    #     visited_user_item_pairs = set()
-
-    # samplers_to_process = [train_sampler]
-    # if not self._use_train_data_only:
-    #     samplers_to_process.extend([validation_sampler, test_sampler])
-
-    # for sampler in samplers_to_process:
-    #     for sample in sampler.dataset:
-    #         user_id = sample["user.ids"][0]
-    #         for item_id in sample["item.ids"]:
-    #             if (user_id, item_id) not in visited_user_item_pairs:
-    #                 # todo (Dynamic Allocation): Repeated list.append() causes frequent memory reallocations.
-    #                 # Recommendation: Pre-allocate NumPy arrays (np.empty) if the total number of interactions is known or estimable.
-    #                 train_interactions.append((user_id, item_id))
-    #                 train_user_interactions.append(user_id)
-    #                 train_item_interactions.append(item_id)
-
-    #                 train_user_2_items[user_id].add(item_id)
-    #                 train_item_2_users[item_id].add(user_id)
-
-    #                 visited_user_item_pairs.add((user_id, item_id))
-
-    # return {
-    #     "train_interactions": train_interactions,
-    #     "train_user_interactions": train_user_interactions,
-    #     "train_item_interactions": train_item_interactions,
-    #     "train_user_2_items": train_user_2_items,
-    #     "train_item_2_users": train_item_2_users,
-    # }
-
     def _collect_interactions(self, train_sampler, validation_sampler, test_sampler):
         train_interactions = []
         train_user_interactions, train_item_interactions = [], []
 
         train_user_2_items = defaultdict(set)
         train_item_2_users = defaultdict(set)
-
-        # SYSTEM OPTIMIZATION (Memory Management):
-        # Instead of storing tuples (user_id, item_id) which are heavy Python objects,
-        # we pack two 32-bit integers into a single 64-bit integer.
-        #
-        # Bit layout: [ USER_ID (32 bits) | ITEM_ID (32 bits) ]
-        # Memory gain: Reduces 'visited' set footprint by ~2-3x, avoiding tuple overhead
-        # and improving cache locality for the set's hash table.
-        # This is critical for large datasets (e.g. Amazon-Books) in RAM-constrained
-        # environments like Yandex DataSphere.
         visited_user_item_pairs = set()
 
         samplers_to_process = [train_sampler]
@@ -633,13 +462,9 @@ class GraphDataset(BaseDataset, config_name="graph"):
             for sample in sampler.dataset:
                 user_id = sample["user.ids"][0]
                 for item_id in sample["item.ids"]:
-                    # Create a unique 64-bit key by shifting user_id to the left by 32 bits
-                    # and performing a bitwise OR with item_id.
-                    # Safe as long as IDs are < 4,294,967,296 (2^32).
                     pair_key = (user_id << 32) | item_id
 
                     if pair_key not in visited_user_item_pairs:
-                        # Keep original tuple format for external compatibility if needed
                         train_interactions.append((user_id, item_id))
 
                         train_user_interactions.append(user_id)
@@ -692,137 +517,37 @@ class GraphDataset(BaseDataset, config_name="graph"):
                 fst_dim + snd_dim,
                 fst_dim + snd_dim,
             ), f"Got shape {adj_mat.shape}, expected {(fst_dim+snd_dim, fst_dim+snd_dim)}"
-
-        # --- OLD IMPLEMENTATION (Slow & Memory Intensive for Large Corpus) ---
-        # rowsum = np.array(adj_mat.sum(1))
-        # d_inv = np.power(rowsum, -0.5).flatten()
-        # d_inv[np.isinf(d_inv)] = 0.
-        # d_mat_inv = sp.diags(d_inv)
-        # norm_adj = d_mat_inv.dot(adj_mat).dot(d_mat_inv)
-        # return norm_adj.tocsr()
-
-        # SANITY CHECKED
-
-        # --- NEW OPTIMIZED IMPLEMENTATION ---
-        """
-        Optimization Strategy: Vectorized Symmetric Normalization (D^-0.5 * A * D^-0.5).
-        
-        Justification for Amazon Books Scale:
-        1. Memory Efficiency: Creating an explicit diagonal matrix 'd_mat_inv' 
-           (size N x N) via sp.diags is redundant. For 800k+ nodes, this consumes 
-           significant RAM and creates heavy intermediate objects.
-        2. Computational Speed: Traditional matrix-matrix multiplication (.dot) 
-           in Scipy sparse has higher overhead compared to row/column-wise scaling.
-        3. Implementation: We perform element-wise multiplication of the sparse 
-           matrix by 1D degree vectors. Multiplying a sparse matrix by a column 
-           vector scales rows, and by a row vector scales columns.
-        
-        This results in an identical Laplacian matrix but is calculated in O(E) 
-        time with minimal memory footprint, where E is the number of edges.
-        """
         rowsum = np.array(adj_mat.sum(1)).flatten()
         d_inv = np.power(rowsum, -0.5)
         d_inv[np.isinf(d_inv)] = 0.0
 
-        # Scaling rows: multiply by column vector [N, 1]
-        # Scaling columns: multiply by row vector [1, N]
         norm_adj = adj_mat.multiply(d_inv[:, np.newaxis]).multiply(d_inv)
 
         return norm_adj.tocsr()
 
-    # @staticmethod
-    # def _convert_sp_mat_to_sp_tensor(X):
-    #     # todo (Data Redundancy): Multiple conversions Scipy COO -> Numpy -> Torch Tensor.
-    #     # Each step (coo.row, coo.col, coo.data) creates a new copy of the graph indices/values.
-    #     # Recommendation: Use torch.sparse_csr_tensor if possible, or build the tensor
-    #     # directly from the underlying CSR buffers (indptr, indices, data) to save memory.
-    #     coo = X.tocoo().astype(np.float32)
-    #     row = torch.Tensor(coo.row).long()
-    #     col = torch.Tensor(coo.col).long()
-    #     index = torch.stack([row, col])
-    #     data = torch.FloatTensor(coo.data)
-    #     return torch.sparse.FloatTensor(index, data, torch.Size(coo.shape))
-
     @staticmethod
     def _convert_sp_mat_to_sp_tensor(X):
-        """
-        Optimized conversion from Scipy sparse matrix to PyTorch sparse COO tensor.
-
-        Why the original was 'painful' for memory:
-        1. X.tocoo() creates a full copy in COO format.
-        2. .astype(np.float32) creates ANOTHER copy if it wasn't float32.
-        3. torch.Tensor(...) always copies data.
-        4. torch.stack(...) creates yet another temporary object.
-
-        Optimized approach:
-        - Use torch.from_numpy() which shares the underlying memory (Zero-Copy)
-          wherever possible.
-        - Minimize intermediate Python list/tuple creations.
-        """
-        # Ensure we are in COO format (required for the standard Torch sparse API)
         coo = X.tocoo()
-
-        # Use from_numpy to share memory with Scipy's internal arrays.
-        # Note: indices must be long (int64). data should be float32.
         values = torch.from_numpy(coo.data).float()
-
-        # Vstack indices and convert to Long in one go.
-        # coo.row and coo.col are typically int32 or int64 numpy arrays.
         indices = torch.from_numpy(np.vstack((coo.row, coo.col))).long()
-
-        # Use the modern sparse_coo_tensor constructor
         shape = torch.Size(coo.shape)
         return torch.sparse_coo_tensor(indices, values, shape)
 
     @staticmethod
     def _filter_matrix_by_top_k(matrix, k):
-        # --- OLD IMPLEMENTATION (Extremely slow conversion to LIL for large datasets) ---
-        # mat = matrix.tolil()
-        # for i in range(mat.shape[0]):
-        #     if len(mat.rows[i]) <= k:
-        #         continue
-        #     data = np.array(mat.data[i])
-        #     top_k_indices = np.argpartition(data, -k)[-k:]
-        #     mat.data[i] = [mat.data[i][j] for j in top_k_indices]
-        #     mat.rows[i] = [mat.rows[i][j] for j in top_k_indices]
-        # return mat.tocsr()
-
-        # --- NEW OPTIMIZED IMPLEMENTATION ---
-        """
-        Optimization Strategy: Direct CSR Array Manipulation with NumPy Partitioning.
-
-        Justification for Amazon Books Scale:
-        1. Avoids LIL conversion: Converting a 450k x 300k matrix to LIL format
-           (List of Lists) is extremely memory-intensive and slow.
-        2. In-place filtering: By accessing the CSR 'data' and 'indptr' arrays directly,
-           we perform the Top-K filtering with zero additional memory allocation
-           for the matrix structure itself.
-        3. Algorithmic Speed: np.partition finds the threshold value in O(n) average
-           time. Slicing the underlying NumPy arrays is performed at near-C speed,
-           making this orders of magnitude faster than Python-level list operations.
-        """
-
-        # SANITY CHECKED
-
         mat = matrix.tocsr()
 
         for i in range(mat.shape[0]):
             start = mat.indptr[i]
             end = mat.indptr[i + 1]
 
-            # Only process rows that actually exceed the neighborhood size
             if end - start > k:
                 row_slice = mat.data[start:end]
 
-                # Find the threshold value (the k-th largest element)
-                # np.partition is faster than a full sort: it puts the top-k values at the end
                 threshold = np.partition(row_slice, -k)[-k]
 
-                # Effectively prune edges by zeroing out everything below the threshold
-                # This keeps exactly k (or slightly more if there are ties) elements
                 row_slice[row_slice < threshold] = 0
 
-        # Post-processing: remove the explicitly zeroed elements from the sparse structure
         mat.eliminate_zeros()
         return mat
 
@@ -838,139 +563,6 @@ class GraphDataset(BaseDataset, config_name="graph"):
             **self._dataset.meta,
         }
         return meta
-
-
-class ScientificDataset(BaseSequenceDataset, config_name="scientific"):
-    @classmethod
-    def create_from_config(cls, config, **kwargs):
-        data_dir_path = os.path.join(
-            config["path_to_data_dir"],
-            config["name"],
-        )
-
-        max_sequence_length = config["max_sequence_length"]
-
-        dataset_path = os.path.join(data_dir_path, "{}.txt".format("all_data"))
-        with open(dataset_path, "r") as f:
-            lines = f.readlines()
-
-        datasets, max_user_id, max_item_id = cls._parse_and_split_data(
-            lines, max_sequence_length
-        )
-
-        train_dataset = datasets["train"]
-        validation_dataset = datasets["validation"]
-        test_dataset = datasets["test"]
-
-        cls._log_stats(
-            train_dataset,
-            test_dataset,
-            max_user_id,
-            max_item_id,
-            max_sequence_length,
-            config["name"],
-        )
-
-        train_sampler, validation_sampler, test_sampler = cls._create_samplers(
-            config["samplers"],
-            train_dataset,
-            validation_dataset,
-            test_dataset,
-            max_user_id,
-            max_item_id,
-        )
-
-        return cls(
-            train_sampler=train_sampler,
-            validation_sampler=validation_sampler,
-            test_sampler=test_sampler,
-            num_users=max_user_id,
-            num_items=max_item_id,
-            max_sequence_length=max_sequence_length,
-        )
-
-    @staticmethod
-    def _create_samplers(
-        sampler_config,
-        train_dataset,
-        validation_dataset,
-        test_dataset,
-        num_users,
-        num_items,
-    ):
-        train_sampler = TrainSampler.create_from_config(
-            sampler_config,
-            dataset=train_dataset,
-            num_users=num_users,
-            num_items=num_items,
-        )
-        validation_sampler = EvalSampler.create_from_config(
-            sampler_config,
-            dataset=validation_dataset,
-            num_users=num_users,
-            num_items=num_items,
-        )
-        test_sampler = EvalSampler.create_from_config(
-            sampler_config,
-            dataset=test_dataset,
-            num_users=num_users,
-            num_items=num_items,
-        )
-        return train_sampler, validation_sampler, test_sampler
-
-    @staticmethod
-    def _log_stats(
-        train_dataset, test_dataset, max_user_id, max_item_id, max_len, name
-    ):
-        logger.info("Train dataset size: {}".format(len(train_dataset)))
-        logger.info("Test dataset size: {}".format(len(test_dataset)))
-        logger.info("Max user id: {}".format(max_user_id))
-        logger.info("Max item id: {}".format(max_item_id))
-        logger.info("Max sequence length: {}".format(max_len))
-
-        if max_user_id > 0 and max_item_id > 0:
-            sparsity = (
-                (len(train_dataset) + len(test_dataset)) / max_user_id / max_item_id
-            )
-            logger.info("{} dataset sparsity: {}".format(name, sparsity))
-
-    @staticmethod
-    def _parse_and_split_data(lines, max_sequence_length):
-        datasets = {"train": [], "validation": [], "test": []}
-
-        user_ids, item_sequences, max_user_id, max_item_id, _ = (
-            BaseSequenceDataset._create_sequences(lines)
-        )
-
-        for user_id, item_ids in zip(user_ids, item_sequences):
-
-            assert len(item_ids) >= 5
-
-            split_slices = {
-                "train": slice(None, -2),
-                "validation": slice(None, -1),
-                "test": slice(None, None),
-            }
-
-            for part_name, part_slice in split_slices.items():
-                sliced_items = item_ids[part_slice]
-                final_items = sliced_items[-max_sequence_length:]
-
-                assert len(item_ids[-max_sequence_length:]) == len(
-                    set(item_ids[-max_sequence_length:]),
-                )
-
-                datasets[part_name].append(
-                    {
-                        # TODO bad practice but have change git item
-                        "user.ids": [user_id],
-                        "user.length": 1,
-                        "item.ids": final_items,
-                        "item.length": len(final_items),
-                    }
-                )
-
-        return datasets, max_user_id, max_item_id
 
 
 class MCLSRDataset(BaseSequenceDataset, config_name="mclsr"):
@@ -991,6 +583,24 @@ class MCLSRDataset(BaseSequenceDataset, config_name="mclsr"):
                 if item_ids:
                     max_item = max(max_item, max(item_ids))
         return sequences, max_user, max_item
+
+    @staticmethod
+    def _read_train_samples(filepath, max_len=None):
+        samples = []
+        max_user, max_item = 0, 0
+
+        with open(filepath, "r") as f:
+            for line in f:
+                parts = line.strip().split(" ")
+                user_id = int(parts[0])
+                item_ids = [int(i) for i in parts[1:]]
+                if max_len:
+                    item_ids = item_ids[-max_len:]
+                samples.append((user_id, item_ids))
+                max_user = max(max_user, user_id)
+                if item_ids:
+                    max_item = max(max_item, max(item_ids))
+        return samples, max_user, max_item
 
     @classmethod
     def _create_evaluation_sets(cls, data_dir, max_seq_len):
@@ -1032,7 +642,7 @@ class MCLSRDataset(BaseSequenceDataset, config_name="mclsr"):
         data_dir = os.path.join(config["path_to_data_dir"], config["name"])
         max_seq_len = config.get("max_sequence_length")
 
-        train_sequences, u1, i1 = cls._create_sequences_from_file(
+        train_samples, u1, i1 = cls._read_train_samples(
             os.path.join(data_dir, "train_mclsr.txt"), max_seq_len
         )
         train_dataset = [
@@ -1042,7 +652,7 @@ class MCLSRDataset(BaseSequenceDataset, config_name="mclsr"):
                 "item.ids": seq,
                 "item.length": len(seq),
             }
-            for uid, seq in train_sequences.items()
+            for uid, seq in train_samples
         ]
 
         user_to_all_seen_items = defaultdict(set)
