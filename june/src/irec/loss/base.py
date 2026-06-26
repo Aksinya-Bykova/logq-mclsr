@@ -325,12 +325,6 @@ class MCLSRLogqInBatchLoss(TorchLoss, config_name="mclsr_logq_inbatch"):
         all_scores = all_scores - self._logq_lambda * log_q.unsqueeze(0)  # (B, B)
         all_scores.diagonal().add_(self._logq_lambda * log_q)
 
-        # False negative masking: if pos_ids[i] == pos_ids[j] and i != j,
-        # then user j's positive is actually the same item as user i's positive
-        false_neg_mask = pos_ids.unsqueeze(0) == pos_ids.unsqueeze(1)  # (B, B)
-        false_neg_mask.fill_diagonal_(False)
-        all_scores = all_scores.masked_fill(false_neg_mask, -1e12)
-
         # Cross-entropy: positive is the diagonal (target index i for row i)
         labels = torch.arange(batch_size, device=queries.device)
         loss = torch.nn.functional.cross_entropy(all_scores, labels)
