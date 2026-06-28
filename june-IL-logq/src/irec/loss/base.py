@@ -338,61 +338,80 @@ class MCLSRLogqInBatchLoss(TorchLoss, config_name="mclsr_logq_inbatch"):
 class InterestLogQLoss(TorchLoss, config_name="interest_logq"):
     """
     LogQ-corrected Contrastive Loss for Interest-Level alignment.
-
-    This loss synchronizes the user representations from two views:
-    1) Sequential view (Transformer)
-    2) Collaborative view (User-Item Graph)
-
-    The LogQ correction is used to mitigate 'Activity Bias' (the "Addict vs. Fisherman" problem).
-    Without correction, highly active users (addicts) appear in batches too often,
-    acting as aggressive negative samples that push away other users' embeddings,
-    which destroys the semantic clusters of the embedding space.
+    Corrects activity bias by penalizing hyper-active users less
+    when they act as negative samples.
     """
 
+    def __init__(
+        self,
+        fst_embeddings_prefix,
+        snd_embeddings_prefix,
+        user_ids_prefix,
+        path_to_item_counts,
+        logq_lambda=1.0,
+        temperature=0.5,
+        output_prefix=None,
+    ):
+        super().__init__()
+        self._fst_embeddings_prefix = fst_embeddings_prefix
+        self._snd_embeddings_prefix = snd_embeddings_prefix
+        self._user_ids_prefix = user_ids_prefix
+        self._output_prefix = output_prefix
+        self._logq_lambda = logq_lambda
+        self._temperature = temperature
+
+        # Load user frequencies
+        if not os.path.exists(path_to_item_counts):
+            raise FileNotFoundError(
+                f"User counts file not found at {path_to_item_counts}"
+            )
+
+        with open(path_to_item_counts, "rb") as f:
+            counts = pickle.load(f)
+
+        # Process counts into log(P)
+        counts_tensor = torch.tensor(counts, dtype=torch.float32)
+        # Check if already log-probs or raw counts
+        if (counts_tensor > 0).all() and (counts_tensor >= 1.0).any():
+            probs = torch.clamp(counts_tensor / counts_tensor.sum(), min=1e-10)
+            log_q = torch.log(probs)
+        else:
+            log_q = counts_tensor
+
+        self.register_buffer("_log_q_table", log_q)
+
+    @classmethod
+    def create_from_config(cls, config, **kwargs):
+        return cls(
+            fst_embeddings_prefix=config["fst_embeddings_prefix"],
+            snd_embeddings_prefix=config["snd_embeddings_prefix"],
+            user_ids_prefix=config["user_ids_prefix"],
+            path_to_item_counts=config["path_to_item_counts"],
+            logq_lambda=config.get("logq_lambda", 1.0),
+            temperature=config.get("temperature", 0.5),
+            output_prefix=config.get("output_prefix"),
+        )
+
     def forward(self, inputs):
-        # 1. Extract representations and User IDs
-        # fst_embs: user 'current interest' from Transformer
-        # snd_embs: user 'general interest' from User-Item Graph
-        fst_embs = inputs[self._fst_embeddings_prefix]  # (B, D)
-        snd_embs = inputs[self._snd_embeddings_prefix]  # (B, D)
+        fst_embs = inputs[self._fst_embeddings_prefix]  # (B, D) - transformer
+        snd_embs = inputs[self._snd_embeddings_prefix]  # (B, D) - graph
         user_ids = inputs[self._user_ids_prefix]  # (B,)
 
         batch_size = fst_embs.size(0)
 
-        # Ensure the frequency table is on the same device as the embeddings (CPU/GPU)
         if self._log_q_table.device != fst_embs.device:
             self._log_q_table = self._log_q_table.to(fst_embs.device)
 
-        # 2. Compute similarity matrix scaled by Temperature (tau)
-        # all_scores[i, j] = (sim_i_j) / tau
-        # Dividing by temperature is critical for contrastive learning to sharpen
-        # the distribution and prevent gradient vanishing.
-        all_scores = torch.mm(fst_embs, snd_embs.T) / self._temperature  # (B, B)
+        # Similarity matrix scaled by temperature
+        all_scores = torch.mm(fst_embs, snd_embs.T) / self._temperature
 
-        # 3. LogQ Correction for Activity Bias
-        # Get log-probabilities log(P) for users in the current batch
-        log_q = self._log_q_table[user_ids]  # (B,)
-
-        # Subtract lambda * log(P) from all candidates (columns).
-        # This "softens" the penalty for active users when they serve as negatives.
-        # log_q.unsqueeze(0) allows broadcasting: subtracting the row vector from
-        # every row of the similarity matrix.
+        # Apply LogQ correction only to negatives
+        log_q = self._log_q_table[user_ids]
         all_scores = all_scores - self._logq_lambda * log_q.unsqueeze(0)
-
-        # Asymmetry: The LogQ correction should only apply to negatives (j != i).
-        # We add the correction back to the diagonal to keep the positive pair
-        # score (user matched with themselves) "pure" and uncorrected.
         all_scores.diagonal().add_(self._logq_lambda * log_q)
 
-        # 4. Final Loss Computation via Cross-Entropy
-        # Instead of a naive manual implementation: -log(exp(pos) / sum(exp(all))),
-        # we use an algorithmic trick. Since positive pairs are on the diagonal,
-        # the target index for row 'i' is always 'i'.
-        # labels = [0, 1, 2, ..., B-1]
+        # Numerically stable Cross-Entropy
         labels = torch.arange(batch_size, device=fst_embs.device)
-
-        # Cross_entropy combines log_softmax and NLLLoss in a numerically stable way,
-        # preventing potential overflows from the exp() function.
         loss = torch.nn.functional.cross_entropy(all_scores, labels)
 
         if self._output_prefix:
