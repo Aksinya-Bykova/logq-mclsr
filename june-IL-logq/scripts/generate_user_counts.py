@@ -83,3 +83,7 @@ def main():
         pickle.dump(log_q_array, f)
 
     print(f"Saved log(p) for {len(counts)} users to {args.output}")
+
+
+if __name__ == "__main__":
+    main()
