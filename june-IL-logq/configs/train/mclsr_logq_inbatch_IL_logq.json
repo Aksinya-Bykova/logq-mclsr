@@ -78,7 +78,7 @@
         "type": "interest_logq",
         "fst_embeddings_prefix": "sequential_representation",
         "snd_embeddings_prefix": "graph_representation",
-        "user_ids_prefix": "user",
+        "user_ids_prefix": "user_ids",
         "path_to_item_counts": "./data/Clothing/user_counts.pkl",
         "logq_lambda": 1.0,
         "temperature": 0.5,
