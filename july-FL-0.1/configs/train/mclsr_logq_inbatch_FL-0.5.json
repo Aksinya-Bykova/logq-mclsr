@@ -1,5 +1,5 @@
 {
-  "experiment_name": "inbatch_FL_both_off_logq_off_Clothing",
+  "experiment_name": "inbatch_FL_0.5_Clothing",
   "use_wandb": false,
   "best_metric": "validation/recall@1000",
   "dataset": {
